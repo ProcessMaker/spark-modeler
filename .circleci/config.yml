@@ -1,79 +1,113 @@
-# testing using CircleCI orb
-# see https://on.cypress.io/circleci-orb
 
-# to use CircleCI orbs need to use version >= 2.1
-version: 2.1
-orbs:
-  # use Cypress orb from CircleCI registry
-  cypress: cypress-io/cypress@1.14.0
-
-executors:
-  with-chrome:
+version: 2
+jobs:
+  cypress/build:
+    resource_class: xlarge
     docker:
-      - image: 'cypress/browsers:node14.16.0-chrome89-ff86'
+    - image: cypress/base:14.16.0
+    steps:
+    - checkout
+    - restore_cache:
+        keys:
+        - cache-{{ .Branch }}-{{ checksum "package.json" }}
+    - run:
+        name: Npm CI
+        command: npm ci && npm rebuild node-sass && npx browserslist@latest --update-db
+    - run:
+        command: npx cypress verify
+    - save_cache:
+        key: cache-{{ .Branch }}-{{ checksum "package.json" }}
+        paths:
+        - ~/.npm
+        - ~/.cache
+    - run: npm install -g npm@latest && npm run lint
+    - persist_to_workspace:
+        root: ~/
+        paths:
+        - project
+        - .cache/Cypress
+    - run: ls -la
+  cypress/e2e-tests:
+    resource_class: xlarge
+    docker:
+    - image: cypress/browsers:node14.16.0-chrome89-ff86
+    parallelism: 10
+    steps:
+    - attach_workspace:
+        at: ~/
+    - run: ls -la
+    - run:
+        name: before tests
+        command: circleci tests glob "tests/e2e/*/*.js" | circleci tests split > circleci.tests && sed -i 's/No timing found for "//g' circleci.tests && sed -i 's/"//g' circleci.tests && grep "\S" circleci.tests > uno.txt && mv uno.txt circleci.tests && cat circleci.tests    
+    - run:
+        name: run tests    
+        command:  TZ=UTC npx vue-cli-service test:e2e --mode test --headless --browser chrome --reporter mocha-junit-reporter --reporter-options mochaFile=reports/mocha/test-results.xml --spec $(cat circleci.tests | tr "\n" ",")
+    - run: 
+        name: preparate coverage
+        command: mkdir coverage && mv .nyc_output/out.json coverage/coverage-$CIRCLE_NODE_INDEX-$(date +"%s%N").json
+    - save_cache:
+        paths:
+          - coverage/
+        key: pm-{{ .Environment.CIRCLE_NODE_INDEX }}-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
+    - run: ls -la coverage
+  cypress/report:
+    docker:
+    - image: cypress/base:14.16.0
+    steps:
+      - attach_workspace:
+          at: ~/
+      - run:
+          name: tests unit
+          command: npm run test-unit
+      - run: mkdir coverage
+      - restore_cache:
+          keys:
+            - pm-0-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
+      - restore_cache:
+          keys:
+            - pm-1-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
+      - restore_cache:
+          keys:
+            - pm-2-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
+      - restore_cache:
+          keys:
+            - pm-3-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
+      - restore_cache:
+          keys:
+            - pm-4-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
+      - restore_cache:
+          keys:
+            - pm-5-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
+      - restore_cache:
+          keys:
+            - pm-6-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
+      - restore_cache:
+          keys:
+            - pm-7-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
+      - restore_cache:
+          keys:
+            - pm-8-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
+      - restore_cache:
+          keys:
+            - pm-9-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
+      - run: ls -la coverage && cp jest-coverage/coverage-final.json coverage/from-jest.json
+      - run: npx nyc merge coverage && mkdir .nyc_output
+      - run: mv coverage.json .nyc_output/out.json
+      - run: npx nyc report --reporter html --reporter text --reporter json-summary --report-dir combined-coverage
+      - store_artifacts:
+          path: combined-coverage
+      - store_test_results:
+          path: test_summary_reports 
+      
 workflows:
   build:
     jobs:
-      - cypress/install
-        # runs tests using Chrome browser in custom executor (Cypress docker image)
-      - cypress/run:
-          requires:
-            - cypress/install
-          start: apt-get install -y sed && circleci tests glob "tests/e2e/*/*.js" | circleci tests split > circleci.tests && sed -i 's/No timing found for "//g' circleci.tests && sed -i 's/"//g' circleci.tests && sed -i 's/tests\/e2e\/plugins\/index.js//g' circleci.tests && sed -i 's/tests\/e2e\/.eslintrc.js//g' circleci.tests && sed -i 's/tests\/unit\/.eslintrc.js//g' circleci.tests && grep "\S" circleci.tests > uno.txt && mv uno.txt circleci.tests  && cat circleci.tests && npm rebuild node-sass && npx browserslist@latest --update-db && npm run serve
-          wait-on: 'http://localhost:8080'
-          executor: with-chrome
-          browser: chrome
-          #command: 'npm install -g npm@latest && npm run lint && npm test'
-          command: 'npm install -g npm@latest && npm run lint && TZ=UTC npx vue-cli-service test:e2e --mode test --headless --browser chrome --reporter mocha-junit-reporter --reporter-options mochaFile=reports/mocha/test-results.xml --spec $(cat circleci.tests | tr "\n" ",")'
-          parallel: true
-          parallelism: 10
-          post-steps:
-            - run: mkdir coverage && mv .nyc_output/out.json coverage/coverage-$CIRCLE_NODE_INDEX-$(date +"%s%N").json
-            - save_cache:
-                paths:
-                  coverage/
-                key: pm-{{ .Environment.CIRCLE_NODE_INDEX }}-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
-            - run: ls -la coverage
-      - cypress/run:
-          requires:
-            - cypress/run
-          command: npm run test-unit
-          post-steps:
-            - restore_cache:
-                keys:
-                  - pm-0-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
-            - restore_cache:
-                keys:
-                  - pm-1-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
-            - restore_cache:
-                keys:
-                  - pm-2-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
-            - restore_cache:
-                keys:
-                  - pm-3-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
-            - restore_cache:
-                keys:
-                  - pm-4-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
-            - restore_cache:
-                keys:
-                  - pm-5-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
-            - restore_cache:
-                keys:
-                  - pm-6-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
-            - restore_cache:
-                keys:
-                  - pm-7-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
-            - restore_cache:
-                keys:
-                  - pm-8-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
-            - restore_cache:
-                keys:
-                  - pm-9-{{ .Branch }}-{{ .Environment.CIRCLE_WORKFLOW_ID }}-coverage.json
-            - run: ls -la coverage && cp jest-coverage/coverage-final.json coverage/from-jest.json
-            - run: npx nyc merge coverage && mkdir .nyc_output
-            - run: mv coverage.json .nyc_output/out.json
-            - run: npx nyc report --reporter html --reporter text --reporter json-summary --report-dir combined-coverage
-            - store_artifacts:
-                path: combined-coverage
-            - store_test_results:
-                path: test_summary_reports 
+    - cypress/build
+    - cypress/e2e-tests:
+        requires:
+          - cypress/build
+    - cypress/report:
+        requires:
+          - cypress/e2e-tests
+
+  version: 2
